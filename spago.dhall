@@ -12,12 +12,16 @@ to generate this file without the comments in this block.
 -}
 { name = "my-project"
 , dependencies =
-  [ "arrays"
+  [ "argonaut"
+  , "argonaut-core"
+  , "arrays"
   , "console"
   , "debug"
   , "effect"
   , "either"
   , "foldable-traversable"
+  , "foreign-object"
+  , "integers"
   , "lazy"
   , "maybe"
   , "numbers"

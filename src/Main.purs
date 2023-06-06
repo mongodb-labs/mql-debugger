@@ -2,17 +2,25 @@ module Main where
 
 import Prelude
 
+import Data.Argonaut.Parser (jsonParser)
+import Data.Argonaut.Core (caseJson, Json(..), fromObject, fromArray, stringifyWithIndent)
+import Data.Either as E
+import Data.Lazy (force)
+import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Tuple (Tuple(..), fst)
+import Data.Array (zip)
 import Effect (Effect)
 import Effect.Console (log)
-import Data.Maybe (fromMaybe)
-import Data.Lazy (force)
-import Data.Tuple (Tuple(..), fst)
 import JsonPos as J
 
-
 testIn :: String
-testIn = "[{$match : {x : {$gt: 1}}}, \n\
-\  {$project : {y : {$add: ['$x', 2]}}}]"
+testIn =
+  """[{$project :
+  {_id : true,
+   y : {$add: ['$x', 2]}}}]"""
+
+testSrcLoc :: String
+testSrcLoc = "[{$project: {_id: true, y: {$add: [{originalExpr: '$x', sourceLocId: 5}, {$const: 1, sourceLocId: 6}], sourceLocId: 4}}}]"
 
 main :: Effect Unit
 main = do
@@ -21,4 +29,5 @@ main = do
   log "toks"
   log $ show $ toks
   log "parsed json"
-  log $ show $ fst $ fromMaybe (Tuple { json : J.JNull, pos : { col : 0, row : 0 } } []) $ force J.parseJson toks
+  let posed = fst $ fromMaybe (Tuple { json: J.JNull, pos: { col: 0, row: 0 } } []) $ force J.parseJson toks
+  log $ stringifyWithIndent 4 $ J.toJson posed

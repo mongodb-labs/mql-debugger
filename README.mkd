@@ -1,0 +1,3 @@
+# JSON Parser With Source Code Location Info
+
+This is a simple LL JSON Parser which traces the starting position of each token, for using with MQL debugger in VSCode
