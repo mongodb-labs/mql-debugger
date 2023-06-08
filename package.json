@@ -1,0 +1,68 @@
+{
+  "name": "mql-debugger",
+  "version": "1.0.0",
+  "description": "This is a simple LL JSON Parser which traces the starting position of each token, for using with MQL debugger in VSCode",
+  "main": "./extension.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "type": "commonjs",
+  "engines": {
+    "vscode": "^1.66.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mongodb-labs/jsonpos.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mongodb-labs/jsonpos/issues"
+  },
+  "homepage": "https://github.com/mongodb-labs/jsonpos#readme",
+  "categories": [
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onLanguage:json"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "extension.mqldebugger.debugCurrentEditor",
+        "title": "Start MQL Debugging"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "haskell"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "mql",
+        "label": "mql-debugger",
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "workspace"
+            ],
+            "properties": {
+              "workspace": {
+                "type": "string",
+                "description": "Absolute path to the workspace.",
+                "default": "${workspaceFolder}"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "dependencies": {
+    "@types/vscode": "^1.78.1"
+  }
+}
