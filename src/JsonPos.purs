@@ -1,14 +1,15 @@
 module JsonPos
-  ( Pos
-  , Token(..)
-  , TokenizeState
-  , Tokenizer
-  , tokenize
-  , parseJson
-  , Json(..)
+  ( Json(..)
   , JsonWPos(..)
+  , Pos
+  , Token(..)
+  , parseJson
   , toJson
-  ) where
+  , toJsonWithOutPos
+  , tokLen
+  , tokenize
+  )
+  where
 
 import Prelude
 
@@ -22,7 +23,8 @@ import Data.Int (toNumber)
 import Data.Lazy (Lazy, defer, force)
 import Data.Maybe as M
 import Data.Number as N
-import Data.String (CodePoint, toCodePointArray, codePointFromChar, singleton, fromCodePointArray)
+import Data.String (CodePoint, toCodePointArray, codePointFromChar, singleton, fromCodePointArray, stripPrefix, stripSuffix, length)
+import Data.String.Pattern (Pattern(..))
 import Data.String.Regex as R
 import Data.String.Regex.Flags (noFlags)
 import Data.Tuple as T
@@ -38,7 +40,7 @@ data Token
   | ArrStart
   | ArrEnd
   | Str String
-  | Num Number
+  | Num Number String
   | FieldName String
   | True
   | False
@@ -53,11 +55,21 @@ instance showToken :: Show Token where
   show ArrStart = "\"[\""
   show ArrEnd = "\"]\""
   show (Str s) = s <> " : string"
-  show (Num n) = show n <> " : number"
+  show (Num n _) = show n <> " : number"
   show (FieldName f) = f <> " : fieldname"
   show False = "False"
   show True = "True"
   show Null = "Null"
+
+tokLen :: Token -> Int
+tokLen (Str s) = 2 + length s
+tokLen (FieldName f) = length f
+tokLen (Num _ r) = length r
+tokLen False = 5
+tokLen True = 4
+tokLen Null = 4
+tokLen _ = 1
+
 
 type Pos = { row :: Int, col :: Int }
 
@@ -72,20 +84,20 @@ type TokenizeState = S.State Tokenizer
 
 initTokenizer :: String -> Tokenizer
 initTokenizer input =
-  { pos: { row: 0, col: 0 }
+  { pos: { row: 1, col: 1 }
   , buf: []
   , quote: M.Nothing
   , rest: toCodePointArray input
   }
 
-tokenize :: String -> M.Maybe (Array { tok :: Token, pos :: Pos })
+tokenize :: String -> E.Either ({ tok :: Array { tok :: Token, pos :: Pos }, st :: Tokenizer }) (Array { tok :: Token, pos :: Pos })
 tokenize input =
   let
     res = S.runState tokenize' $ initTokenizer input
     toks = T.fst res
     st = T.snd res
   in
-    if st.rest == [] && st.buf == [] && M.isNothing st.quote then M.Just toks else M.Nothing
+    if st.rest == [] && st.buf == [] && M.isNothing st.quote then E.Right toks else E.Left { tok : toks, st : st }
 
 tokenize' :: TokenizeState (Array { tok :: Token, pos :: Pos })
 tokenize' = do
@@ -111,11 +123,14 @@ readToken = do
 decideToken :: String -> Pos -> (M.Maybe { tok :: Token, pos :: Pos })
 decideToken str pos =
   case N.fromString str of
-    M.Just n -> M.Just { tok: Num n, pos: pos }
+    M.Just n -> M.Just { tok: Num n str, pos: pos }
     M.Nothing ->
       if isQuotedStr str then
-        M.Just { tok: Str str, pos: pos }
+        M.Just { tok: Str (rmQuotes str), pos: pos }
       else M.Just { tok: atomicToken str, pos: pos }
+  where rmQuotes s = case stripPrefix (Pattern "\"") s of
+                      M.Just rest -> M.fromMaybe s $ stripSuffix (Pattern "\"") rest
+                      M.Nothing -> M.fromMaybe s $ (stripPrefix (Pattern "\'") s) >>= (stripSuffix (Pattern "\'"))
 
 atomicToken :: String -> Token
 atomicToken "true" = True
@@ -188,7 +203,7 @@ readChar = do
         S.modify_ (\st -> st { pos { row = r + 1, col = 0 } })
       else
         S.modify_ (\st -> st { pos { col = c + 1 } })
-      when (h == codePointFromChar '\"' || h == codePointFromChar '\'') do
+      when (h == codePointFromChar '\"' || h == codePointFromChar '\'') 
         case s.quote of
           M.Nothing -> do S.modify_ (\st -> st { quote = M.Just h })
           M.Just q -> when (q == h) do S.modify_ (\st -> st { quote = M.Nothing })
@@ -217,7 +232,7 @@ instance showJson :: Show Json where
   show (JBool true) = "true"
   show (JBool false) = "false"
 
-type JsonWPos = { json :: Json, pos :: Pos }
+type JsonWPos = { json :: Json, pos :: Pos, endPos :: Pos }
 type TokArr = Array { tok :: Token, pos :: Pos }
 type TRes = T.Tuple JsonWPos TokArr
 type TokParser = TokArr -> M.Maybe TRes
@@ -226,12 +241,15 @@ parseJson :: Lazy TokParser
 parseJson = defer \_ -> parseEither parseObject $ parseEither parseArr parseVal
 
 parseVal :: TokParser
-parseVal toks = case uncons toks of
-  M.Just { head: h, tail: t } -> (parseVal' h.tok t) >>= (\(T.Tuple j r) -> M.Just $ T.Tuple { json: j, pos: h.pos } r)
+parseVal toks = (parseAny isSpace toks) >>= (T.snd >>> parseVal_)
+
+parseVal_ :: TokParser
+parseVal_ toks = case uncons toks of
+  M.Just { head: h, tail: t } -> (parseVal' h.tok t) >>= (\(T.Tuple j r) -> M.Just $ T.Tuple { json: j, pos: h.pos, endPos: {row: h.pos.row, col: h.pos.col + tokLen h.tok} } r)
   M.Nothing -> M.Nothing
   where
   parseVal' (Str s) rest = M.Just $ T.Tuple (JStr s) rest
-  parseVal' (Num n) rest = M.Just $ T.Tuple (JNum n) rest
+  parseVal' (Num n _) rest = M.Just $ T.Tuple (JNum n) rest
   parseVal' True rest = M.Just $ T.Tuple (JBool true) rest
   parseVal' False rest = M.Just $ T.Tuple (JBool false) rest
   parseVal' Null rest = M.Just $ T.Tuple JNull rest
@@ -239,11 +257,12 @@ parseVal toks = case uncons toks of
 
 parseArr :: TokParser
 parseArr toks = do
-  T.Tuple start rest <- parseOne isArrStart toks
+  T.Tuple _ rest <- parseAny isSpace toks
+  T.Tuple start rest <- parseOne isArrStart rest
   T.Tuple _ rest <- parseAny isSpace rest
   T.Tuple es rest <- parseArrElms rest
-  T.Tuple _ rest <- parseOne isArrEnd rest
-  pure $ T.Tuple { json: JArr es, pos: start.pos } rest
+  T.Tuple end rest <- parseOne isArrEnd rest
+  pure $ T.Tuple { json: JArr es, pos: start.pos, endPos: end.pos } rest
 
 parseArrElms :: TokArr -> M.Maybe (T.Tuple (Array JsonWPos) TokArr)
 parseArrElms toks =
@@ -262,10 +281,11 @@ parseArrElm toks = do
 
 parseObject :: TokParser
 parseObject toks = do
-  T.Tuple start rest <- parseOne isObjStart toks
+  T.Tuple _ rest <- parseAny isSpace toks
+  T.Tuple start rest <- parseOne isObjStart rest
   T.Tuple fs rest <- parseFields rest
-  T.Tuple _ rest <- parseOne isObjEnd rest
-  pure $ T.Tuple { json: JObj fs, pos: start.pos } rest
+  T.Tuple end rest <- parseOne isObjEnd rest
+  pure $ T.Tuple { json: JObj fs, pos: start.pos, endPos: end.pos } rest
 
 parseFields :: TokArr -> M.Maybe (T.Tuple (Array { fieldName :: String, val :: JsonWPos }) TokArr)
 parseFields toks =
@@ -354,11 +374,22 @@ parseEither a b toks =
     M.Nothing -> b toks
 
 toJson :: JsonWPos -> AC.Json
-toJson { json: (JStr s), pos: p } = AC.fromObject $ Object.fromFoldable $ [ T.Tuple "expr" $ AC.fromString s ] <> [ T.Tuple "__srcPos" $ AC.fromObject $ Object.fromFoldable [ T.Tuple "col" (AC.fromNumber $ toNumber p.col), T.Tuple "row" (AC.fromNumber $ toNumber p.row) ] ]
-toJson { json: (JNum n), pos: p } = AC.fromObject $ Object.fromFoldable $ [ T.Tuple "expr" $ AC.fromNumber n ] <> [ T.Tuple "__srcPos" $ AC.fromObject $ Object.fromFoldable [ T.Tuple "col" (AC.fromNumber $ toNumber p.col), T.Tuple "row" (AC.fromNumber $ toNumber p.row) ] ]
-toJson { json: (JBool b), pos: p } = AC.fromObject $ Object.fromFoldable $ [ T.Tuple "expr" $ AC.fromBoolean b ] <> [ T.Tuple "__srcPos" $ AC.fromObject $ Object.fromFoldable [ T.Tuple "col" (AC.fromNumber $ toNumber p.col), T.Tuple "row" (AC.fromNumber $ toNumber p.row) ] ]
+toJson { json: (JStr s), pos: p, endPos : ep } = AC.fromObject $ Object.fromFoldable $ [ T.Tuple "expr" $ AC.fromString s ] <> [ T.Tuple "__srcPos" $ AC.fromObject $ Object.fromFoldable [ T.Tuple "col" (AC.fromNumber $ toNumber p.col), T.Tuple "row" (AC.fromNumber $ toNumber p.row), T.Tuple "endCol" (AC.fromNumber $ toNumber ep.col), T.Tuple "endRow" (AC.fromNumber $ toNumber ep.row) ] ]
+toJson { json: (JNum n), pos: p, endPos : ep } = AC.fromObject $ Object.fromFoldable $ [ T.Tuple "expr" $ AC.fromNumber n ] <> [ T.Tuple "__srcPos" $ AC.fromObject $ Object.fromFoldable [ T.Tuple "col" (AC.fromNumber $ toNumber p.col), T.Tuple "row" (AC.fromNumber $ toNumber p.row), T.Tuple "endCol" (AC.fromNumber $ toNumber ep.col), T.Tuple "endRow" (AC.fromNumber $ toNumber ep.row) ] ]
+toJson { json: (JBool b), pos: p, endPos : ep } = AC.fromObject $ Object.fromFoldable $ [ T.Tuple "expr" $ AC.fromBoolean b ] <> [ T.Tuple "__srcPos" $ AC.fromObject $ Object.fromFoldable [ T.Tuple "col" (AC.fromNumber $ toNumber p.col), T.Tuple "row" (AC.fromNumber $ toNumber p.row), T.Tuple "endCol" (AC.fromNumber $ toNumber ep.col), T.Tuple "endRow" (AC.fromNumber $ toNumber ep.row) ] ]
 toJson { json: JNull, pos: _ } = AC.jsonNull
 toJson { json: (JArr arr), pos: _ } = AC.fromArray $ map toJson arr
-toJson { json: (JObj items), pos: p } = AC.fromObject $ Object.fromFoldable ((map fieldToJson items) <> [ T.Tuple "__srcPos" $ AC.fromObject $ Object.fromFoldable [ T.Tuple "col" (AC.fromNumber $ toNumber p.col), T.Tuple "row" (AC.fromNumber $ toNumber p.row) ] ])
+toJson { json: (JObj items), pos: p, endPos : ep } = AC.fromObject $ Object.fromFoldable ((map fieldToJson items) <> [ T.Tuple "__srcPos" $ AC.fromObject $ Object.fromFoldable [ T.Tuple "col" (AC.fromNumber $ toNumber p.col), T.Tuple "row" (AC.fromNumber $ toNumber p.row), T.Tuple "endCol" (AC.fromNumber $ toNumber ep.col), T.Tuple "endRow" (AC.fromNumber $ toNumber ep.row) ] ])
   where
   fieldToJson { fieldName: n, val: v } = T.Tuple n $ toJson v
+
+
+toJsonWithOutPos :: JsonWPos -> AC.Json
+toJsonWithOutPos { json: (JStr s), pos: _ } = AC.fromString s
+toJsonWithOutPos { json: (JNum n), pos: _ } = AC.fromNumber n
+toJsonWithOutPos { json: (JBool b), pos: _ } = AC.fromBoolean b
+toJsonWithOutPos { json: JNull, pos: _ } = AC.jsonNull
+toJsonWithOutPos { json: (JArr arr), pos: _ } = AC.fromArray $ map toJsonWithOutPos arr
+toJsonWithOutPos { json: (JObj items), pos: _ } = AC.fromObject $ Object.fromFoldable $ map fieldToJson items
+  where
+  fieldToJson { fieldName: n, val: v } = T.Tuple n $ toJsonWithOutPos v
