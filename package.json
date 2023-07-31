@@ -2,12 +2,14 @@
   "name": "mql-debugger",
   "version": "1.0.0",
   "description": "This is a simple LL JSON Parser which traces the starting position of each token, for using with MQL debugger in VSCode",
-  "main": "./extension.js",
+  "main": "./out/vscode/extension.js",
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build-parser": "spago build",
+    "build-ext": "npx tsc"
   },
   "type": "commonjs",
   "engines": {
@@ -30,6 +32,16 @@
     "onLanguage:json"
   ],
   "contributes": {
+    "configuration": {
+      "title": "MQL Debugger",
+      "properties": {
+        "mqldebugger.pipelineRunnerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the pipeline runner."
+        }
+      }
+    },
     "commands": [
       {
         "command": "extension.mqldebugger.debugCurrentEditor",
@@ -38,13 +50,15 @@
     ],
     "breakpoints": [
       {
-        "language": "haskell"
+        "language": "json"
       }
     ],
     "debuggers": [
       {
         "type": "mql",
         "label": "mql-debugger",
+        "program": "./out/vscode/debugAdapter.js",
+        "runtime": "node",
         "configurationAttributes": {
           "launch": {
             "required": [
@@ -58,11 +72,31 @@
               }
             }
           }
-        }
+        },
+        "initialConfigurations": [
+          {
+            "type": "mql",
+            "request": "launch",
+            "name": "mql",
+            "internalConsoleOptions": "openOnSessionStart",
+            "workspace": "${workspaceFolder}"
+          }
+        ]
       }
     ]
   },
   "dependencies": {
-    "@types/vscode": "^1.78.1"
+    "@types/node": "^20.2.5",
+    "@types/vscode": "^1.78.1",
+    "@vscode/debugadapter": "^1.61.0",
+    "@vscode/debugprotocol": "^1.61.0",
+    "purescript": "^0.15.9",
+    "spago": "^0.21.0",
+    "typed-signals": "^2.5.0",
+    "vscode-debugadapter": "^1.51.0",
+    "wait-for-signals": "^1.2.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.1.3"
   }
 }

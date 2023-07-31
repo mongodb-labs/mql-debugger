@@ -28,6 +28,7 @@ to generate this file without the comments in this block.
   , "prelude"
   , "strings"
   , "transformers"
+  , "ts-bridge"
   , "tuples"
   ]
 , packages = ./packages.dhall
